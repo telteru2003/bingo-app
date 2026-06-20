@@ -1,8 +1,51 @@
 @import "tailwindcss";
 
-:root {
+:root, [data-theme="default"] {
   --background: #ffffff;
   --foreground: #171717;
+  --bg-from: #eff6ff; /* blue-50 */
+  --bg-to: #e0e7ff; /* indigo-100 */
+  --bg-admin: #f9fafb; /* gray-50 */
+  --card-bg: #ffffff; /* white */
+  --card-border: #f3f4f6; /* gray-100 */
+  --text-main: #1f2937; /* gray-800 */
+  --text-muted: #6b7280; /* gray-500 */
+  --cell-bg: #f9fafb; /* gray-50 */
+  --cell-border: #e5e7eb; /* gray-200 */
+  --cell-text: #374151; /* gray-700 */
+  --button-light: #f3f4f6; /* gray-100 */
+}
+
+[data-theme="warm"] {
+  --background: #fff7ed;
+  --foreground: #431407;
+  --bg-from: #fff7ed; /* orange-50 */
+  --bg-to: #fee2e2; /* red-100 */
+  --bg-admin: #fff7ed; /* orange-50 */
+  --card-bg: #fffbf5;
+  --card-border: #ffedd5; /* orange-100 */
+  --text-main: #431407;
+  --text-muted: #9a3412;
+  --cell-bg: #fff7ed; /* orange-50 */
+  --cell-border: #ffedd5; /* orange-100 */
+  --cell-text: #7c2d12; /* orange-900 */
+  --button-light: #ffedd5; /* orange-100 */
+}
+
+[data-theme="dark"] {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --bg-from: #111827; /* gray-900 */
+  --bg-to: #1e293b; /* slate-800 */
+  --bg-admin: #111827; /* gray-900 */
+  --card-bg: #1f2937; /* gray-800 */
+  --card-border: #374151; /* gray-700 */
+  --text-main: #f9fafb; /* gray-50 */
+  --text-muted: #9ca3af; /* gray-400 */
+  --cell-bg: #111827; /* gray-900 */
+  --cell-border: #374151; /* gray-700 */
+  --cell-text: #e5e7eb; /* gray-200 */
+  --button-light: #374151; /* gray-700 */
 }
 
 @theme inline {
@@ -10,17 +53,23 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  
+  --color-bg-from: var(--bg-from);
+  --color-bg-to: var(--bg-to);
+  --color-bg-admin: var(--bg-admin);
+  --color-card-bg: var(--card-bg);
+  --color-card-border: var(--card-border);
+  --color-text-main: var(--text-main);
+  --color-text-muted: var(--text-muted);
+  --color-cell-bg: var(--cell-bg);
+  --color-cell-border: var(--cell-border);
+  --color-cell-text: var(--cell-text);
+  --color-button-light: var(--button-light);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  transition: background-color 0.3s, color 0.3s;
 }
