@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# リアルタイムビンゴアプリ (Bingo App)
 
-## Getting Started
+Next.jsとSupabaseを使用して構築された、リアルタイムで遊べるビンゴアプリです。
 
-First, run the development server:
+## 🚀 アプリへのアクセス
 
+以下のリンクから各ページにアクセスできます。
+
+*(※ Vercel等にデプロイ済みの場合は、以下のリンク先URLを本番環境のものに書き換えてください。)*
+
+- **[🎮 プレイヤーページを開く](http://localhost:3000/)**
+- **[👑 管理者ページを開く](http://localhost:3000/admin)**
+
+---
+
+## 💻 ローカル環境での起動方法
+
+このプロジェクトをご自身のPCで動かすための手順です。
+
+### 1. 依存パッケージのインストール
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+# または
+yarn install
+# または
+pnpm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. 環境変数の設定
+プロジェクトのルートディレクトリに `.env.local` ファイルを作成し、Supabaseのプロジェクト設定から以下の情報を取得して設定してください。
+```env
+NEXT_PUBLIC_SUPABASE_URL=あなたのSupabase_URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY=あなたのSupabase_ANON_KEY
+```
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. 開発サーバーの起動
+```bash
+npm run dev
+# または
+yarn dev
+# または
+pnpm dev
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+起動後、ブラウザで以下のURLにアクセスして動作を確認できます。
+- プレイヤーページ： [http://localhost:3000](http://localhost:3000)
+- 管理者ページ： [http://localhost:3000/admin](http://localhost:3000/admin)
 
-## Learn More
+## 🛠 使用技術
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js](https://nextjs.org/) (App Router)
+- [React](https://reactjs.org/)
+- [Supabase](https://supabase.com/) (リアルタイム通信機能等)
+- [Tailwind CSS](https://tailwindcss.com/)
+- [Framer Motion](https://www.framer.com/motion/) (アニメーション)
+- [canvas-confetti](https://www.npmjs.com/package/canvas-confetti) (紙吹雪演出)
+- [html5-qrcode](https://github.com/mebjas/html5-qrcode) / [react-qr-code](https://www.npmjs.com/package/react-qr-code) (QRコード関連)
