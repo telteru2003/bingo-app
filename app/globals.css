@@ -14,6 +14,8 @@
   --cell-border: #e5e7eb; /* gray-200 */
   --cell-text: #374151; /* gray-700 */
   --button-light: #f3f4f6; /* gray-100 */
+  --cell-favorite-bg: #fff1f2; /* rose-50 */
+  --cell-favorite-hover: #ffe4e6; /* rose-100 */
 }
 
 [data-theme="warm"] {
@@ -30,6 +32,8 @@
   --cell-border: #ffedd5; /* orange-100 */
   --cell-text: #7c2d12; /* orange-900 */
   --button-light: #ffedd5; /* orange-100 */
+  --cell-favorite-bg: #ffe4e6; /* rose-100 */
+  --cell-favorite-hover: #fecdd3; /* rose-200 */
 }
 
 [data-theme="dark"] {
@@ -46,6 +50,8 @@
   --cell-border: #374151; /* gray-700 */
   --cell-text: #e5e7eb; /* gray-200 */
   --button-light: #374151; /* gray-700 */
+  --cell-favorite-bg: #3f1522; /* dark subtle rose */
+  --cell-favorite-hover: #501b2c; /* dark subtle rose hover */
 }
 
 @theme inline {
@@ -63,8 +69,54 @@
   --color-text-muted: var(--text-muted);
   --color-cell-bg: var(--cell-bg);
   --color-cell-border: var(--cell-border);
-  --color-cell-text: var(--cell-text);
   --color-button-light: var(--button-light);
+  --color-cell-favorite-bg: var(--cell-favorite-bg);
+  --color-cell-favorite-hover: var(--cell-favorite-hover);
+
+  --animate-flashy: flashy 1.5s ease-in-out infinite;
+}
+
+@keyframes flashy {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.4);
+    filter: brightness(1);
+  }
+  50% {
+    transform: scale(1.03);
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.8), 0 0 30px rgba(239, 68, 68, 0.5);
+    filter: brightness(1.1);
+  }
+}
+
+@keyframes sunburst {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.btn-sunburst {
+  z-index: 1;
+}
+
+.btn-sunburst::before,
+.btn-sunburst::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.8) 0%, rgba(239, 68, 68, 0) 70%);
+  z-index: -1;
+  animation: sunburst 2s cubic-bezier(0.1, 0.5, 0.3, 1) infinite;
+}
+
+.btn-sunburst::after {
+  animation-delay: 1s;
 }
 
 body {
