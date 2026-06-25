@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { supabase } from "../src/lib/supabaseClient";
 import { Camera, QrCode, X, RefreshCw, AlertTriangle, HelpCircle, Clock, FileText, ArrowDown, ArrowUp, Image as ImageIcon, Upload, Heart } from "lucide-react";
 import { Html5Qrcode } from "html5-qrcode";
 import QRCode from "react-qr-code";
 import confetti from "canvas-confetti";
 import { useTheme } from "../src/components/ThemeProvider";
-
+import { DndContext, useSensor, useSensors, PointerSensor, TouchSensor, DragEndEvent, useDraggable, useDroppable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
+import { motion } from 'framer-motion';
 interface TalkTheme {
   id: number | string;
   content: string;
@@ -32,9 +34,24 @@ export interface Achievement {
   category: string;
 }
 
+interface BingoDraw {
+  id: string;
+  drawn_employee_id: string;
+  drawn_at: string;
+}
+
+interface BingoCard {
+  id: string;
+  player_name: string;
+  cell_index: number;
+  employee_id: string;
+  created_at: string;
+}
+
 type CellData =
-  | { type: "free"; isOpen: boolean }
-  | { type: "employee"; employee: Employee; isOpen: boolean; openedAt?: string; talkTheme?: string };
+  | { id: string; type: "free"; isOpen: boolean; openedAt?: string }
+  | { id: string; type: "empty"; isOpen: boolean; openedAt?: string }
+  | { id: string; type: "employee"; employee: Employee; isOpen: boolean; placedAt?: string; talkTheme?: string; openedAt?: string };
 
 const generatePin = (id: string | number) => {
   const str = String(id);
@@ -83,6 +100,162 @@ const resizeImage = (file: File): Promise<string> => {
   });
 };
 
+const BingoCell = React.memo(function BingoCell({ index, cell, onClick, allEmployees, achievementsData, fallbackTitles, isReachTarget }: any) {
+  const isDraggableDropable = index !== 12 && !cell.isOpen && cell.type !== 'free';
+
+  const { attributes, listeners, setNodeRef: setDraggableNodeRef, transform, isDragging } = useDraggable({
+    id: `drag-${cell.id}`,
+    data: { index, absoluteIndex: index, cell }, // 絶対インデックスを明示的に渡す
+    disabled: !isDraggableDropable,
+  });
+
+  const { setNodeRef: setDroppableNodeRef, isOver } = useDroppable({
+    id: cell.id,
+    data: { index, absoluteIndex: index, cell }, // 絶対インデックスを明示的に渡す
+    disabled: !isDraggableDropable || isDragging, // ドラッグ中はこのマスをドロップ先として判定させない（暴走防止）
+  });
+
+  const setNodeRef = (node: HTMLElement | null) => {
+    setDraggableNodeRef(node);
+    setDroppableNodeRef(node);
+  };
+
+  const style = {
+    transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : "none",
+    opacity: isDragging ? 0.8 : 1,
+    zIndex: isDragging ? 50 : 1,
+    boxShadow: isOver && !isDragging ? '0 0 0 4px rgba(99, 102, 241, 0.5)' : 'none',
+    touchAction: 'none',
+  };
+
+  const isOpen = cell.isOpen;
+
+  let hasSelfIntro = false;
+  if (cell.type === "employee" && cell.employee) {
+    const empFromDb = allEmployees.find((e: any) => e.id === cell.employee.id);
+    const introData = empFromDb ? empFromDb.self_introduction : cell.employee.self_introduction;
+    if (introData) hasSelfIntro = true;
+  }
+
+  const className = `
+    relative aspect-square flex flex-col items-center justify-center
+    rounded-xl sm:rounded-2xl shadow-sm text-xs font-bold transition-all duration-300 ease-out
+    border-2 ${index === 12 && !isOpen ? "overflow-visible" : "overflow-hidden"}
+    ${index === 12 && !isOpen
+      ? hasSelfIntro
+        ? "btn-sunburst bg-gradient-to-br from-yellow-400 via-orange-400 to-red-500 border-2 border-yellow-200 text-white shadow-md transform scale-100 font-extrabold"
+        : "btn-sunburst bg-gradient-to-br from-yellow-400 via-orange-400 to-red-500 border-2 border-yellow-200 text-white shadow-md transform scale-100 animate-flashy font-extrabold"
+      : cell.type === "empty"
+        ? "bg-transparent border-dashed border-gray-300 hover:border-indigo-400 hover:bg-indigo-50/50 text-gray-400 hover:text-indigo-500 cursor-pointer"
+        : isOpen
+          ? (cell.type === "employee" && cell.employee.is_rare)
+            ? "bg-gradient-to-br from-yellow-400 via-amber-300 to-yellow-500 border-yellow-400 text-yellow-900 shadow-[inset_0_2px_10px_rgba(255,255,255,0.5),0_0_15px_rgba(250,204,21,0.6)] scale-[0.97] animate-[pulse_2s_ease-in-out_infinite]"
+            : index === 12
+              ? "bg-gradient-to-br from-pink-500 to-rose-500 border-pink-600 text-white shadow-inner scale-[0.97]"
+              : "bg-indigo-500 border-indigo-600 text-white shadow-inner scale-[0.97]"
+          : (cell.type === "employee" && cell.employee.is_favorite)
+            ? `bg-cell-favorite-bg border-cell-border text-cell-text transition-colors hover:bg-cell-favorite-hover hover:border-indigo-200 hover:scale-[1.01] active:scale-[0.97] ${isReachTarget ? 'animate-heartbeat border-pink-400 border-2 z-10' : ''}`
+            : `bg-cell-bg border-cell-border text-cell-text transition-colors hover:bg-indigo-50 hover:border-indigo-200 hover:scale-[1.01] active:scale-[0.97] ${isReachTarget ? 'animate-heartbeat border-pink-400 border-2 z-10' : ''}`
+    }
+  `;
+
+  let innerContent = null;
+  if (cell.type === "empty") {
+    innerContent = <span className="text-3xl font-light">+</span>;
+  } else {
+    let hasImage = false;
+    let image = "";
+    if (cell.type === "employee") {
+      const empFromDb = allEmployees.find((e: any) => e.id === cell.employee.id);
+      const introData = empFromDb ? empFromDb.self_introduction : cell.employee.self_introduction;
+      if (introData) {
+        try {
+          const parsed = JSON.parse(introData);
+          if (parsed.image) {
+            image = parsed.image;
+            hasImage = true;
+          }
+        } catch { }
+      }
+    }
+
+    if (hasImage) {
+      innerContent = <img src={image} className="absolute inset-0 w-full h-full object-cover" alt="Profile" />;
+    } else if (index === 12 && !isOpen) {
+      innerContent = (
+        <span className="text-[10px] sm:text-xs leading-tight text-center px-1 drop-shadow-md relative z-10">
+          タップして<br />自己紹介
+        </span>
+      );
+    } else {
+      innerContent = (
+        <div className="relative z-10 flex flex-col items-center justify-center w-full">
+          {cell.type === "employee" && (() => {
+            const empFromDb = allEmployees.find((e: any) => e.id === cell.employee.id);
+            const currentTitleCode = empFromDb ? empFromDb.equipped_title : cell.employee.equipped_title;
+
+            if (!currentTitleCode) return null;
+
+            const titleObj = achievementsData.find((a: any) => a.code === currentTitleCode);
+            const displayTitle = titleObj ? titleObj.name : (fallbackTitles[currentTitleCode]?.name || "称号");
+
+            return (
+              <span className="text-[8px] bg-gradient-to-r from-yellow-500 to-orange-500 text-white px-1.5 py-0.5 rounded-sm mb-0.5 whitespace-nowrap scale-90 shadow-sm border border-yellow-300">
+                {displayTitle}
+              </span>
+            );
+          })()}
+          <span className="text-center leading-tight px-1 break-words w-full line-clamp-2">
+            {cell.type === "employee" ? cell.employee.name || "No Name" : ""}
+          </span>
+        </div>
+      );
+    }
+  }
+
+  return (
+    <motion.button
+      layout={!isDragging} // ドラッグ中はレイアウトアニメーションを無効化し、dnd-kitのtransformと競合するチラつきを防止
+      transition={{ layout: { type: "spring", bounce: 0.1, duration: 0.4 } }}
+      ref={setNodeRef}
+      style={style}
+      onClick={() => onClick(index)}
+      {...attributes}
+      {...listeners}
+      className={className}
+    >
+      {innerContent}
+      {isOpen && index !== 12 && (
+        <div className="absolute inset-0 bg-black/5 rounded-xl sm:rounded-2xl pointer-events-none"></div>
+      )}
+    </motion.button>
+  );
+});
+
+// マスターデータ未取得時のための称号名フォールバック辞書
+const fallbackTitles: Record<string, { name: string, description: string }> = {
+  bingo_beginner: { name: "ビンゴビギナー", description: "初めてビンゴゲームに参加する" },
+  lucky: { name: "ラッキー！", description: "初めてビンゴを達成する" },
+  double_threat: { name: "ダブルスレット", description: "1回のゲームで2列同時にビンゴを達成する" },
+  completer: { name: "コンプリーター", description: "カードの全マスを開ける" },
+  sonic_bingo: { name: "音速のビンゴ職人", description: "最短手数でビンゴになる" },
+  jirashi_master: { name: "じらしの達人", description: "リーチになってから10回以上数字が呼ばれてもビンゴにならない" },
+  surechigai_god: { name: "すれ違いの神様", description: "リーチが3つ以上あるのにビンゴしない" },
+  appearance_check: { name: "身だしなみチェック", description: "プロフィール画像をはじめて設定した" },
+  nice_to_meet_you: { name: "はじめまして！", description: "自己紹介をはじめて設定した" },
+  unwavering_will: { name: "変わらない意志", description: "自己紹介の内容を変更していないのに「確定する」ボタンを押した" },
+  telepathy_hope: { name: "テレパシー希望", description: "自己紹介を15文字しか書かなかった" },
+  storyteller: { name: "語り部", description: "自己紹介を100文字も書いた" },
+  consider_reader: { name: "読む方の身にもなって", description: "自己紹介を1000文字も書いた" },
+  destruction_creation: { name: "破壊と再生", description: "「リセット」ボタンを押した" },
+  sleeping: { name: "寝落ち？", description: "「遊び方」の画面で1分間も何も操作しなかった" },
+  which_is_top: { name: "どっちが上？", description: "履歴のソートボタンを10回も連続で押した" },
+  paripi: { name: "パリピ", description: "画面の背景色を変えるボタンを連続で何度も切り替えた" },
+  lost_lamb: { name: "迷える子羊", description: "「別のテーマにする」ボタンを連続で10回も押した" },
+  hacker_wannabe: { name: "ハッカー気取り", description: "4ケタのPIN番号を何度も間違えた" },
+  ssr_hunter: { name: "SSRハンター", description: "激レアキャラのマスをはじめて開けた" }
+};
+
 export default function BingoPage() {
   const [cells, setCells] = useState<CellData[]>([]);
   const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
@@ -110,30 +283,88 @@ export default function BingoPage() {
   const [hasResetOnce, setHasResetOnce] = useState(false);
   const [inputPin, setInputPin] = useState("");
   const [pinError, setPinError] = useState("");
-  const { theme } = useTheme();
+  const { theme, reloadTheme } = useTheme();
 
-  // マスターデータ未取得時のための称号名フォールバック辞書
-  const fallbackTitles: Record<string, { name: string, description: string }> = {
-    bingo_beginner: { name: "ビンゴビギナー", description: "初めてビンゴゲームに参加する" },
-    lucky: { name: "ラッキー！", description: "初めてビンゴを達成する" },
-    double_threat: { name: "ダブルスレット", description: "1回のゲームで2列同時にビンゴを達成する" },
-    completer: { name: "コンプリーター", description: "カードの全マスを開ける" },
-    sonic_bingo: { name: "音速のビンゴ職人", description: "最短手数でビンゴになる" },
-    jirashi_master: { name: "じらしの達人", description: "リーチになってから10回以上数字が呼ばれてもビンゴにならない" },
-    surechigai_god: { name: "すれ違いの神様", description: "リーチが3つ以上あるのにビンゴしない" },
-    appearance_check: { name: "身だしなみチェック", description: "プロフィール画像をはじめて設定した" },
-    nice_to_meet_you: { name: "はじめまして！", description: "自己紹介をはじめて設定した" },
-    unwavering_will: { name: "変わらない意志", description: "自己紹介の内容を変更していないのに「確定する」ボタンを押した" },
-    telepathy_hope: { name: "テレパシー希望", description: "自己紹介を15文字しか書かなかった" },
-    storyteller: { name: "語り部", description: "自己紹介を100文字も書いた" },
-    consider_reader: { name: "読む方の身にもなって", description: "自己紹介を1000文字も書いた" },
-    destruction_creation: { name: "破壊と再生", description: "「リセット」ボタンを押した" },
-    sleeping: { name: "寝落ち？", description: "「遊び方」の画面で1分間も何も操作しなかった" },
-    which_is_top: { name: "どっちが上？", description: "履歴のソートボタンを10回も連続で押した" },
-    paripi: { name: "パリピ", description: "画面の背景色を変えるボタンを連続で何度も切り替えた" },
-    lost_lamb: { name: "迷える子羊", description: "「別のテーマにする」ボタンを連続で10回も押した" },
-    hacker_wannabe: { name: "ハッカー気取り", description: "4ケタのPIN番号を何度も間違えた" },
-    ssr_hunter: { name: "SSRハンター", description: "激レアキャラのマスをはじめて開けた" }
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } })
+  );
+
+  const handleDragStart = (event: any) => {
+    // ドラッグ開始時のインデックスを確実に取得するためのハンドラー
+    const dragIndex = event.active.data.current?.absoluteIndex;
+    if (dragIndex === 12) {
+      // 12番はドラッグ不可
+      return;
+    }
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) return;
+
+    // data経由で絶対インデックス（0〜24）を直接取得する
+    const fromIndex = active.data.current?.absoluteIndex;
+    const toIndex = over.data.current?.absoluteIndex;
+
+    // インデックスが正しく取得できない、または同じマスでのドロップなら終了
+    if (fromIndex === undefined || toIndex === undefined || fromIndex === toIndex) return;
+    
+    // 中央の特殊マス（インデックス12）に対する操作をガード
+    if (fromIndex === 12 || toIndex === 12) return;
+
+    const fromCell = cells[fromIndex];
+    const toCell = cells[toIndex];
+
+    if (fromCell.isOpen || toCell.isOpen) return;
+
+    // 要素の入れ替え処理 (handleSwap相当)
+    setCells(prev => {
+      const newCells = [...prev];
+      // 絶対インデックスに基づいて確実に入れ替えを行う (prevの最新状態を参照)
+      const prevFromCell = prev[fromIndex];
+      const prevToCell = prev[toIndex];
+      
+      // DOMノードの不要な再マウントやdnd-kitの不具合（チラつきやマスの消失・複製）を防ぐため、
+      // マスのid（Reactのkey）は位置に固定し、中身のデータのみをスプレッド構文で安全にクローンして入れ替える
+      newCells[fromIndex] = { ...prevToCell, id: prevFromCell.id };
+      newCells[toIndex] = { ...prevFromCell, id: prevToCell.id };
+      
+      localStorage.setItem("bingoCells", JSON.stringify(newCells));
+      return newCells;
+    });
+
+    if (!isTestMode) {
+      try {
+        if (fromCell.type === 'employee') {
+          await supabase.from("bingo_cards").upsert({
+            player_name: playerName,
+            cell_index: toIndex,
+            employee_id: String(fromCell.employee.id)
+          }, { onConflict: 'player_name, cell_index' });
+        } else {
+          await supabase.from("bingo_cards").delete().match({
+            player_name: playerName,
+            cell_index: toIndex
+          });
+        }
+
+        if (toCell.type === 'employee') {
+          await supabase.from("bingo_cards").upsert({
+            player_name: playerName,
+            cell_index: fromIndex,
+            employee_id: String(toCell.employee.id)
+          }, { onConflict: 'player_name, cell_index' });
+        } else {
+          await supabase.from("bingo_cards").delete().match({
+            player_name: playerName,
+            cell_index: fromIndex
+          });
+        }
+      } catch (err) {
+        console.error("ドラッグ＆ドロップ保存エラー", err);
+      }
+    }
   };
 
   // 追加された状態変数
@@ -161,7 +392,105 @@ export default function BingoPage() {
   const [historySortCount, setHistorySortCount] = useState(0);
   const [pinMistakeCount, setPinMistakeCount] = useState(0);
   const [cellsOpenSinceReach, setCellsOpenSinceReach] = useState(0);
-  const howToStartTimeRef = useRef<number | null>(null);
+
+  const [drawQueue, setDrawQueue] = useState<string[]>([]);
+
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  const startSelfieCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" }
+      });
+      mediaStreamRef.current = stream;
+      setIsCameraActive(true);
+    } catch (err) {
+      console.error("インカメラの起動に失敗しました", err);
+      alert("カメラの起動に失敗しました。権限を確認してください。");
+    }
+  };
+
+  const stopSelfieCamera = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+    setIsCameraActive(false);
+  };
+
+  const captureSelfie = () => {
+    if (videoRef.current) {
+      const canvas = document.createElement("canvas");
+      const video = videoRef.current;
+      
+      const size = Math.min(video.videoWidth, video.videoHeight);
+      canvas.width = 400;
+      canvas.height = 400;
+      
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const sx = (video.videoWidth - size) / 2;
+        const sy = (video.videoHeight - size) / 2;
+        
+        ctx.drawImage(video, sx, sy, size, size, 0, 0, 400, 400);
+        
+        const base64 = canvas.toDataURL("image/jpeg", 0.8);
+        setProfileImageBase64(base64);
+        stopSelfieCamera();
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!showSelfIntroModal && isCameraActive) {
+      stopSelfieCamera();
+    }
+  }, [showSelfIntroModal, isCameraActive]);
+
+  useEffect(() => {
+    if (isCameraActive && videoRef.current && mediaStreamRef.current) {
+      videoRef.current.srcObject = mediaStreamRef.current;
+    }
+  }, [isCameraActive]);
+
+  useEffect(() => {
+    if (drawQueue.length === 0) return;
+    const nextId = drawQueue[0];
+    
+    // 1. まず正しい内部IDで検索
+    let index = cells.findIndex(c => c.type === "employee" && String(c.employee.id) === nextId);
+    
+    // 2. もし見つからない場合（古いドラッグ＆ドロップバグでIDが破損している場合）は、名前でフォールバック検索する
+    if (index === -1) {
+      const drawnEmp = allEmployees.find(e => String(e.id) === nextId);
+      if (drawnEmp) {
+        index = cells.findIndex(c => c.type === "employee" && c.employee.name === drawnEmp.name);
+        if (index !== -1) {
+          console.warn(`Fallback search used for: ${drawnEmp.name}`);
+        }
+      }
+    }
+
+    if (index !== -1 && !cells[index].isOpen) {
+      handleOpenCell(index);
+    }
+    
+    setDrawQueue(prev => prev.slice(1));
+  }, [drawQueue, cells, allEmployees]);
+
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (showHelpModal) {
+      timer = setTimeout(() => {
+        unlockAchievement('sleeping');
+      }, 60000);
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [showHelpModal]);
 
   const unlockAchievement = async (code: string) => {
     if (isTestMode) return; // テストユーザーは称号機能を無効化
@@ -249,6 +578,7 @@ export default function BingoPage() {
     }
     localStorage.removeItem("playerName");
     localStorage.removeItem("bingoCells");
+    reloadTheme();
     setPlayerName("");
     setCells([]);
     setInputName("");
@@ -332,7 +662,8 @@ export default function BingoPage() {
       try {
         const parsedCells = JSON.parse(storedCells);
         if (Array.isArray(parsedCells) && parsedCells.length === 25) {
-          setCells(parsedCells);
+          const patchedCells = parsedCells.map((c: any, i: number) => c.id ? c : { ...c, id: crypto.randomUUID() });
+          setCells(patchedCells);
         } else {
           setShowNameModal(true);
         }
@@ -426,11 +757,12 @@ export default function BingoPage() {
       try {
         setIsLoading(true);
 
-        const [empResponse, themeResponse, logsResponse, achResponse] = await Promise.all([
+        const [empResponse, themeResponse, logsResponse, achResponse, drawsResponse] = await Promise.all([
           supabase.from("employees").select("*"),
           supabase.from("talk_themes").select("*"),
           supabase.from("bingo_logs").select("player_name, event_type, created_at").in("event_type", ["start", "reset"]),
-          supabase.from("achievements").select("*")
+          supabase.from("achievements").select("*"),
+          supabase.from("bingo_draws").select("drawn_employee_id")
         ]);
 
         if (achResponse.data) {
@@ -469,6 +801,46 @@ export default function BingoPage() {
             return nameA.localeCompare(nameB, 'ja');
           });
           setAllEmployees(sortedData);
+
+          // 過去のドラッグ＆ドロップバグによるデータの不整合（名前とIDのズレ）を自己修復する
+          setCells(prev => {
+            let hasCorruptedData = false;
+            const healedCells = prev.map(c => {
+              if (c.type === "employee" && c.employee && c.employee.name) {
+                const correctEmp = sortedData.find(e => e.name === c.employee.name);
+                if (correctEmp && String(correctEmp.id) !== String(c.employee.id)) {
+                  console.warn(`Data corruption detected and healed for: ${c.employee.name}`);
+                  hasCorruptedData = true;
+                  return { ...c, employee: { ...c.employee, id: correctEmp.id } };
+                }
+              }
+              return c;
+            });
+            if (hasCorruptedData) {
+              localStorage.setItem("bingoCells", JSON.stringify(healedCells));
+              return healedCells;
+            }
+            return prev;
+          });
+        }
+
+        if (drawsResponse.data) {
+          const drawnIds = drawsResponse.data.map(d => String(d.drawn_employee_id));
+          setCells(prev => {
+            let updated = false;
+            const newCells = prev.map((c, idx) => {
+              if (idx !== 12 && c.type === "employee" && !c.isOpen && drawnIds.includes(String(c.employee.id))) {
+                updated = true;
+                return { ...c, isOpen: true, openedAt: new Date().toISOString() };
+              }
+              return c;
+            });
+            if (updated) {
+              localStorage.setItem("bingoCells", JSON.stringify(newCells));
+              return newCells;
+            }
+            return prev;
+          });
         }
       } catch (err) {
         console.error("予期せぬエラーが発生しました:", err);
@@ -517,9 +889,21 @@ export default function BingoPage() {
       )
       .subscribe();
 
+    const drawsChannel = supabase
+      .channel('bingo_draws_active_players')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'bingo_draws' },
+        (payload) => {
+          setDrawQueue(prev => [...prev, String(payload.new.drawn_employee_id)]);
+        }
+      )
+      .subscribe();
+
     return () => {
       supabase.removeChannel(channel);
       supabase.removeChannel(logsChannel);
+      supabase.removeChannel(drawsChannel);
     };
   }, []);
 
@@ -651,6 +1035,17 @@ export default function BingoPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cells, isReach, bingoCount, showRareAnim, playerName]);
 
+  const handleCellClickRef = useRef<any>(null);
+  useEffect(() => {
+    handleCellClickRef.current = handleCellClick;
+  });
+  
+  const stableOnClick = useCallback((index: number) => {
+    if (handleCellClickRef.current) {
+      handleCellClickRef.current(index);
+    }
+  }, []);
+
   const handleCellClick = (index: number) => {
     const cell = cells[index];
 
@@ -675,33 +1070,61 @@ export default function BingoPage() {
 
     if (cell.type === "free") return;
 
-    if (cell.isOpen) {
-      if (cell.type === "employee") {
-        setSelectedHistoryItem({
-          employee: cell.employee,
-          talkTheme: cell.talkTheme || "",
-          openedAt: cell.openedAt || new Date().toISOString()
-        });
-        setShowHistoryModal(true);
-      }
+    if (cell.type === "employee") {
+      setSelectedHistoryItem({
+        employee: cell.employee,
+        talkTheme: cell.talkTheme || "",
+        openedAt: cell.placedAt || new Date().toISOString()
+      });
+      setShowHistoryModal(true);
       return;
     }
 
-    if (cells[12] && !cells[12].isOpen) {
+    if (cells[12] && (!('isOpen' in cells[12]) || !cells[12].isOpen)) {
       alert("まずは中央のマスをタップして自己紹介を作成してください！");
       return;
     }
 
-    if (talkThemes.length > 0) {
-      const randomIndex = Math.floor(Math.random() * talkThemes.length);
-      setCurrentTalkTheme(talkThemes[randomIndex]);
-    } else {
-      setCurrentTalkTheme(null);
+    if (cell.type === "empty") {
+      setSelectedCellIndex(index);
+      setIsScannerOpen(false);
+      setIsShowMyQr(false);
+      setInputPin("");
+      setPinError("");
+      if (talkThemes.length > 0) {
+        const randomTheme = talkThemes[Math.floor(Math.random() * talkThemes.length)];
+        setCurrentTalkTheme(randomTheme);
+      }
     }
+  };
 
-    setSelectedCellIndex(index);
-    setIsScannerOpen(false);
-    setIsShowMyQr(false);
+  const handlePlaceEmployee = async (index: number, employee: Employee) => {
+    const now = new Date().toISOString();
+    setCells(prev => {
+      const newCells = [...prev];
+      newCells[index] = { 
+        id: prev[index].id,
+        type: "employee", 
+        employee, 
+        isOpen: false,
+        placedAt: now,
+        talkTheme: currentTalkTheme?.content || undefined
+      };
+      localStorage.setItem("bingoCells", JSON.stringify(newCells));
+      return newCells;
+    });
+
+    if (!isTestMode) {
+      try {
+        await supabase.from("bingo_cards").upsert({
+          player_name: playerName,
+          cell_index: index,
+          employee_id: String(employee.id)
+        }, { onConflict: 'player_name, cell_index' });
+      } catch (err) {
+        console.error("カード配置保存エラー", err);
+      }
+    }
   };
 
   const handleOpenCell = async (index: number | null) => {
@@ -721,14 +1144,22 @@ export default function BingoPage() {
     const now = new Date().toISOString();
     setCells(prevCells => {
       const newCells = prevCells.map((c, i) =>
-        i === index ? { ...c, isOpen: true, openedAt: now, talkTheme: currentTalkTheme?.content || undefined } : c
+        i === index ? { ...c, isOpen: true } : c
       );
       localStorage.setItem("bingoCells", JSON.stringify(newCells));
       return newCells;
     });
 
     if (cell && cell.type === "employee" && index !== 12) {
-      sendLog('open', cell.employee.id);
+      // 念のため、ローカルのIDが破損している場合に備えて正しいIDを検索して送信する
+      let correctId = cell.employee.id;
+      if (allEmployees && allEmployees.length > 0) {
+        const correctEmp = allEmployees.find(e => e.name === cell.employee.name);
+        if (correctEmp) {
+          correctId = correctEmp.id;
+        }
+      }
+      sendLog('open', correctId);
     }
 
     if (cell && cell.type === "employee" && cell.employee.is_rare) {
@@ -788,14 +1219,20 @@ export default function BingoPage() {
   const handleScanSuccess = async (decodedText: string) => {
     if (selectedCellIndex === null) return;
     const cell = cells[selectedCellIndex];
-    if (cell.type === "employee") {
-      if (String(cell.employee.id) === decodedText) {
+    if (cell.type === "empty") {
+      const scannedEmp = allEmployees.find(emp => String(emp.id) === decodedText);
+      if (scannedEmp) {
+        const isPlaced = cells.some(c => c.type === "employee" && String(c.employee.id) === String(scannedEmp.id));
+        if (isPlaced) {
+          alert("この社員はすでに配置されています");
+          return;
+        }
         await stopScanner();
-        handleOpenCell(selectedCellIndex);
+        await handlePlaceEmployee(selectedCellIndex, scannedEmp);
         setSelectedCellIndex(null);
         setIsShowMyQr(false);
       } else {
-        console.log("QRコードが一致しません");
+        console.log("社員データが見つかりません");
       }
     }
   };
@@ -824,6 +1261,7 @@ export default function BingoPage() {
       let testName = `TEST-${randomId}`;
       localStorage.setItem("playerName", testName);
       setPlayerName(testName);
+      reloadTheme();
 
       // 初心者称号の実績解除
       setTimeout(() => {
@@ -831,20 +1269,41 @@ export default function BingoPage() {
       }, 1000);
 
       const newCells: CellData[] = [];
-      let employeeIndex = 0;
       for (let i = 0; i < 25; i++) {
+        const cellId = crypto.randomUUID();
         if (i === 12) {
           newCells.push({
+            id: cellId,
             type: "employee",
             employee: { id: "test", name: testName },
-            isOpen: false,
+            isOpen: true,
           });
         } else {
-          const emp = allEmployees[employeeIndex] || { id: `dummy-${i}`, name: `社員${employeeIndex + 1}` };
-          newCells.push({ type: "employee", employee: emp, isOpen: false });
-          employeeIndex++;
+          newCells.push({ id: cellId, type: "empty", isOpen: false });
         }
       }
+
+      const favorites = allEmployees.filter(
+        emp => selectedFavoriteEmployees.includes(String(emp.id))
+      ).map(emp => ({ ...emp, is_favorite: true }));
+
+      const emptyIndices = [0,1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24].sort(() => 0.5 - Math.random());
+      const shuffledFavorites = [...favorites].sort(() => 0.5 - Math.random());
+      const now = new Date().toISOString();
+
+      shuffledFavorites.forEach(fav => {
+        const index = emptyIndices.pop();
+        if (index !== undefined) {
+          newCells[index] = {
+            id: newCells[index].id,
+            isOpen: newCells[index].isOpen,
+            type: "employee",
+            employee: fav,
+            placedAt: now,
+          };
+        }
+      });
+
       setCells(newCells);
       localStorage.setItem("bingoCells", JSON.stringify(newCells));
       setShowNameModal(false);
@@ -858,6 +1317,7 @@ export default function BingoPage() {
       }
       localStorage.setItem("playerName", inputName.trim());
       setPlayerName(inputName.trim());
+      reloadTheme();
       checkResetStatus(inputName.trim());
 
       // 初心者称号の実績解除
@@ -879,36 +1339,53 @@ export default function BingoPage() {
         emp => selectedFavoriteEmployees.includes(String(emp.id)) && emp.name !== inputName.trim()
       ).map(emp => ({ ...emp, is_favorite: true }));
 
-      const shuffledRemaining = [...remainingEmployees].sort(() => 0.5 - Math.random());
-      const neededCount = 24 - favorites.length;
-      const selectedRemaining = shuffledRemaining.slice(0, neededCount);
-
-      const combined = [...favorites, ...selectedRemaining].sort(() => 0.5 - Math.random());
-
       const newCells: CellData[] = [];
-      let employeeIndex = 0;
       const selfEmp = allEmployees.find(emp => emp.name === inputName.trim()) || { id: "self", name: inputName.trim() };
 
       for (let i = 0; i < 25; i++) {
+        const cellId = crypto.randomUUID();
         if (i === 12) {
-          newCells.push({ type: "employee", employee: selfEmp, isOpen: false });
+          newCells.push({ id: cellId, type: "employee", employee: selfEmp, isOpen: false });
         } else {
-          const emp = combined[employeeIndex] || {
-            id: `dummy-${i}`,
-            name: `社員${employeeIndex + 1}`,
-          };
-          newCells.push({
-            type: "employee",
-            employee: emp,
-            isOpen: false,
-          });
-          employeeIndex++;
+          newCells.push({ id: cellId, type: "empty", isOpen: false });
         }
       }
+
+      const emptyIndices = [0,1,2,3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19,20,21,22,23,24].sort(() => 0.5 - Math.random());
+      
+      const shuffledFavorites = [...favorites].sort(() => 0.5 - Math.random());
+      const now = new Date().toISOString();
+      const insertPromises: any[] = [];
+
+      shuffledFavorites.forEach(fav => {
+        const index = emptyIndices.pop();
+        if (index !== undefined) {
+          newCells[index] = {
+            id: newCells[index].id,
+            isOpen: newCells[index].isOpen,
+            type: "employee",
+            employee: fav,
+            placedAt: now,
+          };
+          if (!isTestMode) {
+            insertPromises.push(
+              supabase.from("bingo_cards").upsert({
+                player_name: inputName.trim(),
+                cell_index: index,
+                employee_id: String(fav.id)
+              }, { onConflict: 'player_name, cell_index' })
+            );
+          }
+        }
+      });
 
       setCells(newCells);
       localStorage.setItem("bingoCells", JSON.stringify(newCells));
       setShowNameModal(false);
+
+      if (insertPromises.length > 0) {
+        Promise.all(insertPromises).catch(err => console.error("お気に入り社員の初期配置保存エラー", err));
+      }
     }
   };
 
@@ -970,6 +1447,24 @@ export default function BingoPage() {
     setShowSelfIntroModal(false);
   };
 
+  const reachCellIndices = new Set<number>();
+  if (cells.length === 25) {
+    const lines = [
+      [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24], // rows
+      [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24], // cols
+      [0, 6, 12, 18, 24], [4, 8, 12, 16, 20] // diagonals
+    ];
+    for (const line of lines) {
+      const openCells = line.filter(idx => cells[idx]?.isOpen);
+      if (openCells.length === 4) {
+        const unopenedIndex = line.find(idx => !cells[idx]?.isOpen);
+        if (unopenedIndex !== undefined) {
+          reachCellIndices.add(unopenedIndex);
+        }
+      }
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-cell-bg transition-colors flex items-center justify-center p-4">
@@ -997,93 +1492,47 @@ export default function BingoPage() {
         </div>
 
         {/* ビンゴボードエリア */}
-        <div className="bg-card-bg transition-colors p-3 sm:p-5 rounded-3xl shadow-xl border border-gray-100/80">
-          <div className="grid grid-cols-5 gap-2 sm:gap-3">
-            {cells.map((cell, index) => {
-              const isFree = cell.type === "free";
-              const isOpen = cell.isOpen;
-
-              return (
-                <button
-                  key={index}
-                  onClick={() => handleCellClick(index)}
-                  className={`
-                    relative aspect-square flex flex-col items-center justify-center
-                    rounded-xl sm:rounded-2xl shadow-sm text-xs font-bold transition-all duration-300 ease-out
-                    border-2 ${index === 12 && !isOpen ? "overflow-visible" : "overflow-hidden"}
-                    ${index === 12 && !isOpen
-                      ? "btn-sunburst bg-gradient-to-br from-yellow-400 via-orange-400 to-red-500 border-2 border-yellow-200 text-white shadow-md transform scale-100 animate-flashy font-extrabold"
-                      : isOpen
-                        ? (cell.type === "employee" && cell.employee.is_rare)
-                          ? "bg-gradient-to-br from-yellow-400 via-amber-300 to-yellow-500 border-yellow-400 text-yellow-900 shadow-[inset_0_2px_10px_rgba(255,255,255,0.5),0_0_15px_rgba(250,204,21,0.6)] scale-[0.97] animate-[pulse_2s_ease-in-out_infinite]"
-                          : index === 12
-                            ? "bg-gradient-to-br from-pink-500 to-rose-500 border-pink-600 text-white shadow-inner scale-[0.97]"
-                            : "bg-indigo-500 border-indigo-600 text-white shadow-inner scale-[0.97]"
-                        : (cell.type === "employee" && cell.employee.is_favorite)
-                          ? "bg-cell-favorite-bg border-cell-border text-cell-text transition-colors hover:bg-cell-favorite-hover hover:border-indigo-200 hover:scale-[1.02] active:scale-[0.97]"
-                          : "bg-cell-bg border-cell-border text-cell-text transition-colors hover:bg-indigo-50 hover:border-indigo-200 hover:scale-[1.02] active:scale-[0.97]"
-                    }
-                  `}
-                >
-                  {(() => {
-                    let hasImage = false;
-                    let image = "";
-                    if (isOpen && cell.type === "employee" && cell.employee.self_introduction) {
-                      try {
-                        const parsed = JSON.parse(cell.employee.self_introduction);
-                        if (parsed.image) {
-                          image = parsed.image;
-                          hasImage = true;
-                        }
-                      } catch { }
-                    }
-
-                    if (hasImage) {
-                      return <img src={image} className="absolute inset-0 w-full h-full object-cover" alt="Profile" />;
-                    }
-
-                    if (index === 12 && !isOpen) {
-                      return (
-                        <span className="text-[10px] sm:text-xs leading-tight text-center px-1 drop-shadow-md relative z-10">
-                          タップして<br />自己紹介
-                        </span>
-                      );
-                    }
-
-                    return (
-                      <div className="relative z-10 flex flex-col items-center justify-center w-full">
-                        {cell.type === "employee" && (() => {
-                          // localStorageの古い情報ではなく、DBから取得した最新のallEmployeesから装備称号を参照する
-                          const empFromDb = allEmployees.find(e => e.id === cell.employee.id);
-                          const currentTitleCode = empFromDb ? empFromDb.equipped_title : cell.employee.equipped_title;
-
-                          if (!currentTitleCode) return null;
-
-                          const titleObj = achievementsData.find(a => a.code === currentTitleCode);
-
-                          const displayTitle = titleObj ? titleObj.name : (fallbackTitles[currentTitleCode]?.name || "称号");
-
-                          return (
-                            <span className="text-[8px] bg-gradient-to-r from-yellow-500 to-orange-500 text-white px-1.5 py-0.5 rounded-sm mb-0.5 whitespace-nowrap scale-90 shadow-sm border border-yellow-300">
-                              {displayTitle}
-                            </span>
-                          );
-                        })()}
-                        <span className="text-center leading-tight px-1 break-words w-full line-clamp-2">
-                          {cell.type === "employee" ? cell.employee.name || "No Name" : ""}
-                        </span>
-                      </div>
-                    );
-                  })()}
-
-                  {/* 開いている状態の時のオーバーレイ効果 */}
-                  {isOpen && index !== 12 && (
-                    <div className="absolute inset-0 bg-black/5 rounded-xl sm:rounded-2xl"></div>
-                  )}
-                </button>
-              );
-            })}
+        <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+          <div className="bg-card-bg transition-colors p-3 sm:p-5 rounded-3xl shadow-xl border border-gray-100/80">
+            <div className="grid grid-cols-5 gap-2 sm:gap-3">
+              {cells.map((cell, index) => (
+                <BingoCell
+                  key={cell.id}
+                  index={index}
+                  cell={cell}
+                  onClick={stableOnClick}
+                  allEmployees={allEmployees}
+                  achievementsData={achievementsData}
+                  fallbackTitles={fallbackTitles}
+                  isReachTarget={reachCellIndices.has(index)}
+                />
+              ))}
+            </div>
           </div>
+        </DndContext>
+
+        {/* 配置の進行状況表示 */}
+        <div className="mt-6 text-center w-full max-w-md mx-auto px-2">
+          {(() => {
+            const placedCount = cells.filter(c => c.type === "employee").length;
+            if (placedCount < 25) {
+              return (
+                <div className="bg-white/90 backdrop-blur-sm rounded-xl p-3 shadow-sm border border-indigo-100">
+                  <p className="text-sm font-bold text-indigo-800">
+                    空きマスをタップして社員を配置しよう！ ( {Math.max(0, placedCount - 1)} / 24 )
+                  </p>
+                </div>
+              );
+            } else {
+              return (
+                <div className="bg-indigo-50 backdrop-blur-sm rounded-xl p-3 shadow-sm border border-indigo-200 animate-pulse">
+                  <p className="text-sm font-bold text-indigo-700">
+                    🎉 カードが完成しました！幹事の抽選をお待ちください。
+                  </p>
+                </div>
+              );
+            }
+          })()}
         </div>
 
         {/* フッターアクション（スマホ向けレスポンシブ配置） */}
@@ -1122,7 +1571,6 @@ export default function BingoPage() {
             <button
               onClick={() => {
                 setShowHelpModal(true);
-                howToStartTimeRef.current = Date.now();
               }}
               className="flex flex-col items-center gap-1.5 text-indigo-500 hover:text-indigo-700 transition-colors flex-1"
             >
@@ -1150,7 +1598,7 @@ export default function BingoPage() {
       </div>
 
       {/* モーダル */}
-      {selectedCellIndex !== null && cells[selectedCellIndex] && cells[selectedCellIndex].type === "employee" && (
+      {selectedCellIndex !== null && cells[selectedCellIndex] && cells[selectedCellIndex].type === "empty" && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={closeModal}>
           <div className="bg-card-bg transition-colors w-full max-w-sm rounded-3xl p-6 shadow-2xl relative flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
             <button
@@ -1160,59 +1608,55 @@ export default function BingoPage() {
               <X size={20} />
             </button>
 
-            {/* フリガナ表示（NEW） */}
-            {(cells[selectedCellIndex] as any).employee.furigana && (
-              <p className="text-xs text-text-muted transition-colors font-medium mb-0.5 mt-2">
-                {(cells[selectedCellIndex] as any).employee.furigana}
+            <div className="mb-2 text-center mt-2">
+              <h2 className="text-2xl font-bold text-text-main transition-colors mb-1 flex items-center justify-center gap-2">
+                誰に話しかける？
+              </h2>
+              <p className="text-sm text-text-muted transition-colors text-center">
+                相手を見つけて、トークテーマで話そう！
               </p>
-            )}
-            <h2 className="text-2xl font-bold text-text-main transition-colors mb-2 flex items-center justify-center gap-2">
-              {(cells[selectedCellIndex] as any).employee.name || "名前なし"}
-              {(cells[selectedCellIndex] as any).employee.is_favorite && (
-                <span className="text-xs bg-pink-100 text-pink-600 px-2 py-0.5 rounded-full flex items-center gap-1 font-bold shadow-sm">
-                  <Heart size={12} fill="currentColor" />
-                  お気に入り
-                </span>
-              )}
-            </h2>
+            </div>
 
-            {currentTalkTheme && (
-              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-6 w-full text-center">
-                <p className="text-xs text-indigo-400 font-bold mb-1 tracking-wider">TALK THEME</p>
-                <p className="text-indigo-900 font-medium">{currentTalkTheme.content}</p>
-              </div>
-            )}
+            <div className="w-full bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-4 mt-2">
+              <p className="text-[10px] text-indigo-500 font-bold text-center mb-2 tracking-widest">TALK THEME</p>
+              <p className="text-sm font-bold text-indigo-900 text-center leading-relaxed">
+                {currentTalkTheme ? currentTalkTheme.content : "好きな食べ物は？"}
+              </p>
+            </div>
 
             {!isScannerOpen && (
-              <div className="flex flex-col gap-3 w-full mt-2">
+              <div className="flex flex-col gap-3 w-full">
                 <button
                   onClick={() => {
+                    if (talkThemes.length > 0) {
+                      let nextTheme;
+                      do {
+                        nextTheme = talkThemes[Math.floor(Math.random() * talkThemes.length)];
+                      } while (nextTheme.id === currentTalkTheme?.id && talkThemes.length > 1);
+                      setCurrentTalkTheme(nextTheme);
+                    }
                     setThemeChangeCount(prev => {
                       const next = prev + 1;
                       if (next === 10) unlockAchievement('lost_lamb');
                       return next;
                     });
-                    if (talkThemes.length > 0) {
-                      const randomIndex = Math.floor(Math.random() * talkThemes.length);
-                      setCurrentTalkTheme(talkThemes[randomIndex]);
-                    }
                   }}
-                  className="flex items-center justify-center gap-2 bg-white border-2 border-indigo-100 hover:bg-indigo-50 text-indigo-600 font-bold py-2 px-4 rounded-xl transition-all active:scale-[0.98]"
+                  className="flex items-center justify-center gap-2 bg-white border border-indigo-200 hover:bg-indigo-50 text-indigo-600 font-bold py-3 px-4 rounded-xl shadow-sm transition-all active:scale-[0.98]"
                 >
-                  <RefreshCw size={18} />
+                  <RefreshCw size={16} />
                   別のテーマにする
                 </button>
+
                 <button
                   onClick={startScanner}
-                  className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all active:scale-[0.98]"
+                  className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all active:scale-[0.98] mt-2"
                 >
                   <Camera size={20} />
-                  QRを読み取ってマスを開ける
+                  QRを読み取って配置する
                 </button>
 
-                {/* 番号入力エリア */}
                 <div className="flex flex-col gap-2 bg-cell-bg transition-colors p-4 rounded-xl border border-gray-200 mt-2">
-                  <p className="text-xs text-center text-text-muted transition-colors font-bold">または4ケタのPIN番号を入力して開ける</p>
+                  <p className="text-xs text-center text-text-muted transition-colors font-bold">または4ケタのPIN番号を入力して配置</p>
                   <div className="flex items-center justify-center gap-3">
                     <input
                       type="text"
@@ -1229,27 +1673,29 @@ export default function BingoPage() {
                     <button
                       onClick={() => {
                         if (selectedCellIndex === null) return;
-                        const cell = cells[selectedCellIndex];
-                        if (cell?.type === "employee") {
-                          const correctPin = generatePin(cell.employee.id);
-                          if (inputPin === correctPin) {
-                            handleOpenCell(selectedCellIndex);
+                        const targetEmp = allEmployees.find(emp => generatePin(emp.id) === inputPin);
+                        if (targetEmp) {
+                          const isPlaced = cells.some(c => c.type === "employee" && String(c.employee.id) === String(targetEmp.id));
+                          if (isPlaced) {
+                            setPinError("すでに配置されています");
+                          } else {
+                            handlePlaceEmployee(selectedCellIndex, targetEmp);
                             closeModal();
                             setPinMistakeCount(0);
-                          } else {
-                            setPinError("番号が違います");
-                            setPinMistakeCount(prev => {
-                              const next = prev + 1;
-                              if (next >= 5) unlockAchievement('hacker_wannabe');
-                              return next;
-                            });
                           }
+                        } else {
+                          setPinError("番号が違います");
+                          setPinMistakeCount(prev => {
+                            const next = prev + 1;
+                            if (next >= 5) unlockAchievement('hacker_wannabe');
+                            return next;
+                          });
                         }
                       }}
                       disabled={inputPin.length !== 4}
                       className="bg-indigo-600 disabled:bg-gray-300 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg font-bold transition-colors"
                     >
-                      開ける
+                      配置する
                     </button>
                   </div>
                   {pinError && <p className="text-xs text-red-500 text-center font-bold">{pinError}</p>}
@@ -1258,29 +1704,33 @@ export default function BingoPage() {
             )}
 
             {isScannerOpen && (
-              <div className="w-full flex flex-col items-center">
+              <div className="w-full flex flex-col items-center mt-4">
                 <div id="reader" className="w-full max-w-[250px] overflow-hidden rounded-xl bg-black mb-4"></div>
                 <button
                   onClick={stopScanner}
-                  className="bg-button-light transition-colors hover:bg-gray-200 text-cell-text transition-colors font-bold py-2 px-6 rounded-full transition-colors mt-4"
+                  className="bg-button-light transition-colors hover:bg-gray-200 text-cell-text transition-colors font-bold py-2 px-6 rounded-full transition-colors mt-2"
                 >
                   カメラを閉じる
                 </button>
               </div>
             )}
 
-
-
-            {/* 開発環境用デバッグ機能：QRスキャンなしでマスを開ける */}
-            {process.env.NODE_ENV === "development" && (
+            {/* 開発環境用デバッグ機能 */}
+            {process.env.NODE_ENV === "development" && !isScannerOpen && (
               <button
                 onClick={() => {
-                  handleOpenCell(selectedCellIndex);
-                  closeModal();
+                  const unplacedEmployees = allEmployees.filter(emp => !cells.some(c => c.type === "employee" && c.employee.id === emp.id) && emp.id !== "dummy-12" && emp.name !== playerName);
+                  if (unplacedEmployees.length > 0) {
+                    const targetEmp = unplacedEmployees[Math.floor(Math.random() * unplacedEmployees.length)];
+                    handlePlaceEmployee(selectedCellIndex, targetEmp);
+                    closeModal();
+                  } else {
+                    alert("配置可能な社員がいません");
+                  }
                 }}
                 className="mt-6 text-xs text-gray-400 hover:text-text-main transition-colors underline"
               >
-                [デバッグ] 強制的にマスを開ける
+                [デバッグ] ランダムな社員を配置する
               </button>
             )}
           </div>
@@ -1405,11 +1855,6 @@ export default function BingoPage() {
             <button
               onClick={() => {
                 setShowHelpModal(false);
-                if (howToStartTimeRef.current) {
-                  const duration = Date.now() - howToStartTimeRef.current;
-                  if (duration >= 60000) unlockAchievement('sleeping');
-                  howToStartTimeRef.current = null;
-                }
               }}
               className="absolute top-4 right-4 text-gray-400 hover:text-text-main transition-colors bg-button-light transition-colors p-2 rounded-full transition-colors"
             >
@@ -1444,11 +1889,6 @@ export default function BingoPage() {
             <button
               onClick={() => {
                 setShowHelpModal(false);
-                if (howToStartTimeRef.current) {
-                  const duration = Date.now() - howToStartTimeRef.current;
-                  if (duration >= 60000) unlockAchievement('sleeping');
-                  howToStartTimeRef.current = null;
-                }
               }}
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all active:scale-[0.98]"
             >
@@ -1515,9 +1955,27 @@ export default function BingoPage() {
               )}
 
               <div className="flex flex-col gap-1">
-                <label className="text-xs font-bold text-cell-text transition-colors">
-                  お気に入り社員（最大{isTestMode ? 24 : 10}名まで: 現在 {selectedFavoriteEmployees.length}名）
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-cell-text transition-colors">
+                    お気に入り社員（最大{isTestMode ? 24 : 15}名まで: 現在 {selectedFavoriteEmployees.length}名）
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const maxCount = isTestMode ? 24 : 15;
+                      const availableEmps = allEmployees.filter(emp => {
+                        if (emp.is_rare) return false;
+                        return !isTestMode ? emp.name !== inputName && !emp.is_absent : true;
+                      });
+                      const shuffled = [...availableEmps].sort(() => 0.5 - Math.random());
+                      const selected = shuffled.slice(0, maxCount).map(emp => String(emp.id));
+                      setSelectedFavoriteEmployees(selected);
+                    }}
+                    className="text-[10px] font-bold bg-indigo-100 text-indigo-700 hover:bg-indigo-200 px-2 py-1 rounded transition-colors"
+                  >
+                    ランダム選択
+                  </button>
+                </div>
                 <div className="border border-gray-200 rounded-xl max-h-48 overflow-y-auto p-2 bg-cell-bg transition-colors flex flex-col gap-2">
                   {allEmployees
                     .filter((emp) => {
@@ -1527,7 +1985,7 @@ export default function BingoPage() {
                     .sort((a, b) => (a.furigana || "").localeCompare(b.furigana || "", 'ja'))
                     .map((emp) => {
                       const isSelected = selectedFavoriteEmployees.includes(String(emp.id));
-                      const isDisabled = !isSelected && selectedFavoriteEmployees.length >= (isTestMode ? 24 : 10);
+                      const isDisabled = !isSelected && selectedFavoriteEmployees.length >= (isTestMode ? 24 : 15);
                       return (
                         <label
                           key={emp.id}
@@ -1540,7 +1998,7 @@ export default function BingoPage() {
                             checked={isSelected}
                             onChange={(e) => {
                               if (e.target.checked) {
-                                if (selectedFavoriteEmployees.length < (isTestMode ? 24 : 10)) {
+                                if (selectedFavoriteEmployees.length < (isTestMode ? 24 : 15)) {
                                   setSelectedFavoriteEmployees([...selectedFavoriteEmployees, String(emp.id)]);
                                 }
                               } else {
@@ -1588,40 +2046,59 @@ export default function BingoPage() {
               ビンゴに参加するため、あなたの自己紹介を15文字以上で入力してください。後から編集も可能です。
             </p>
             <div className="w-full flex flex-col items-center mb-4">
-              <div className="relative w-24 h-24 mb-2 rounded-full border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50 flex items-center justify-center overflow-hidden transition-colors group cursor-pointer">
-                {profileImageBase64 ? (
-                  <img src={profileImageBase64} alt="Profile" className="w-full h-full object-cover" />
-                ) : (
-                  <ImageIcon className="text-indigo-300 group-hover:text-indigo-500 transition-colors" size={32} />
-                )}
-                <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Upload className="text-white mb-1" size={20} />
-                  <span className="text-[10px] text-white font-bold">画像を選択</span>
+              {isCameraActive ? (
+                <div className="relative w-48 h-48 mb-2 rounded-2xl overflow-hidden bg-black flex flex-col items-center justify-center shadow-inner">
+                  <video ref={videoRef} className="w-full h-full object-cover" autoPlay playsInline muted />
+                  <button
+                    onClick={captureSelfie}
+                    className="absolute bottom-4 bg-white text-indigo-600 font-bold py-2 px-6 rounded-full shadow-lg hover:bg-gray-100 transition-colors active:scale-95 flex items-center gap-2"
+                  >
+                    <Camera size={16} />
+                    撮影する
+                  </button>
+                  <button
+                    onClick={stopSelfieCamera}
+                    className="absolute top-2 right-2 text-white bg-black/50 p-1.5 rounded-full hover:bg-black/70 transition-colors"
+                  >
+                    <X size={16} />
+                  </button>
                 </div>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    if (file) {
-                      try {
-                        const base64 = await resizeImage(file);
-                        setProfileImageBase64(base64);
-                      } catch (error) {
-                        alert("画像の読み込みに失敗しました。");
-                      }
-                    }
-                  }}
-                />
-              </div>
-              {profileImageBase64 && (
-                <button
-                  onClick={() => setProfileImageBase64("")}
-                  className="text-[10px] text-red-500 hover:underline font-bold"
+              ) : (
+                <div 
+                  className="relative w-24 h-24 mb-2 rounded-full border-2 border-dashed border-indigo-200 hover:border-indigo-400 bg-indigo-50 flex items-center justify-center overflow-hidden transition-colors group cursor-pointer"
+                  onClick={profileImageBase64 ? undefined : startSelfieCamera}
                 >
-                  画像を削除
-                </button>
+                  {profileImageBase64 ? (
+                    <img src={profileImageBase64} alt="Profile" className="w-full h-full object-cover" />
+                  ) : (
+                    <Camera className="text-indigo-300 group-hover:text-indigo-500 transition-colors" size={32} />
+                  )}
+                  {!profileImageBase64 && (
+                    <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Camera className="text-white mb-1" size={20} />
+                      <span className="text-[10px] text-white font-bold">写真を撮る</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {profileImageBase64 && !isCameraActive && (
+                <div className="flex gap-4 mt-1">
+                  <button
+                    onClick={() => {
+                      setProfileImageBase64("");
+                      startSelfieCamera();
+                    }}
+                    className="text-[11px] text-indigo-500 hover:underline font-bold"
+                  >
+                    撮り直す
+                  </button>
+                  <button
+                    onClick={() => setProfileImageBase64("")}
+                    className="text-[11px] text-red-500 hover:underline font-bold"
+                  >
+                    画像を削除
+                  </button>
+                </div>
               )}
             </div>
 
@@ -1865,15 +2342,15 @@ export default function BingoPage() {
             ) : (
               <div className="flex-1 overflow-y-auto flex flex-col gap-2">
                 {(() => {
-                  const openedCells = cells
-                    .filter((c, i) => c.isOpen && c.type === "employee" && i !== 12 && c.openedAt)
+                  const placedCells = cells
+                    .filter((c, i) => c.type === "employee" && i !== 12 && (c.placedAt || c.openedAt))
                     .sort((a: any, b: any) => {
-                      const timeA = new Date(a.openedAt).getTime();
-                      const timeB = new Date(b.openedAt).getTime();
+                      const timeA = new Date(a.placedAt || a.openedAt).getTime();
+                      const timeB = new Date(b.placedAt || b.openedAt).getTime();
                       return historySortOrder === 'desc' ? timeB - timeA : timeA - timeB;
                     });
 
-                  if (openedCells.length === 0) {
+                  if (placedCells.length === 0) {
                     return (
                       <div className="flex flex-col items-center justify-center h-full text-gray-400">
                         <Clock size={40} className="mb-2 opacity-50" />
@@ -1882,10 +2359,10 @@ export default function BingoPage() {
                     );
                   }
 
-                  return openedCells.map((cell: any, idx: number) => {
-                    const date = new Date(cell.openedAt);
+                  return placedCells.map((cell: any, idx: number) => {
+                    const date = new Date(cell.placedAt || cell.openedAt);
                     const formattedDate = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-                    const realIndex = historySortOrder === 'desc' ? openedCells.length - idx : idx + 1;
+                    const realIndex = historySortOrder === 'desc' ? placedCells.length - idx : idx + 1;
 
                     return (
                       <button
@@ -1893,7 +2370,7 @@ export default function BingoPage() {
                         onClick={() => setSelectedHistoryItem({
                           employee: cell.employee,
                           talkTheme: cell.talkTheme || "",
-                          openedAt: cell.openedAt
+                          openedAt: cell.placedAt || cell.openedAt
                         })}
                         className="flex items-center justify-between w-full bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50 p-3 rounded-xl transition-all text-left"
                       >
